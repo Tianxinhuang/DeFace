@@ -1,8 +1,8 @@
 # DeFace
 
-> Learning to Decouple the Lights for 3D Face Texture Modeling
-> Tianxin Huang, Zhenyu Zhang, Ying Tai, Gim Hee Lee
-> NeurIPS'24
+> Learning to Decouple the Lights for 3D Face Texture Modeling 
+> Tianxin Huang, Zhenyu Zhang, Ying Tai, Gim Hee Lee 
+> NeurIPS'24 
 
 ![intro](overall.png)
 
@@ -32,6 +32,7 @@ pip install -r requirements.txt
 
 The sub-folders under ('Deface') should be organized as
 
+```
 Deface/
 ├── cfgs/
 │   ├── vox2_img.ini
@@ -44,7 +45,7 @@ Deface/
 │       └──cp/79999.pth
 ├── baselMorphableModel
 └── ...
-
+```
 
 ## How to Use
 
