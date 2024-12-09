@@ -6,7 +6,7 @@
 
 ![intro](overall.png)
 
-My personal page: [Personal]('https://tianxinhuang.github.io/') | Our project page: [Project]('https://tianxinhuang.github.io/projects/Deface')
+My personal page: [Personal](https://tianxinhuang.github.io/) | Our project page: [Project](https://tianxinhuang.github.io/projects/Deface)
 
 ## TODO List and ETA
 - [x] Code for optimization.
@@ -53,7 +53,6 @@ Just replace following dirs with your own ones, and run the optimization with:
 
 ```
 python3 evaluate.py --configs your_config_dir --input_dir your_img_dir --output_dir your_output_dir --ckpt_dir your_ckpt_dir >log.txt
-
 ```
 
 We have provided 4 different config files for our evaluation data in the ('cfgs') dir. You can also adjust the hyper-parameters for your own data.
@@ -63,7 +62,6 @@ After running the optimization, you can evaluate the performances by:
 
 ```
 python3 metrics.py --input_dir your_img_dir --output_dir your_output_dir --result_dir your_result_file.txt
-
 ```
 
 Then, the quantitative results would be written into the ('--result_dir').
