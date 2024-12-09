@@ -6,7 +6,7 @@
 
 ![intro](overall.png)
 
-[My Personal Page:](https://tianxinhuang.github.io/) | [Our Project Page](https://tianxinhuang.github.io/projects/Deface)
+[My Personal Page :)](https://tianxinhuang.github.io/) | [Our Project Page :)](https://tianxinhuang.github.io/projects/Deface)
 
 ## TODO List and ETA
 - [x] Code for optimization.
