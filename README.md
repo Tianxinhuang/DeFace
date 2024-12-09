@@ -1,12 +1,12 @@
 # DeFace
 
-> Learning to Decouple the Lights for 3D Face Texture Modeling 
-> Tianxin Huang, Zhenyu Zhang, Ying Tai, Gim Hee Lee 
+> Learning to Decouple the Lights for 3D Face Texture Modeling  
+> Tianxin Huang, Zhenyu Zhang, Ying Tai, Gim Hee Lee  
 > NeurIPS'24 
 
 ![intro](overall.png)
 
-[Personal]('https://tianxinhuang.github.io/') | [Project]('https://tianxinhuang.github.io/projects/Deface')
+My personal page: [Personal]('https://tianxinhuang.github.io/') | Our project page: [Project]('https://tianxinhuang.github.io/projects/Deface')
 
 ## TODO List and ETA
 - [x] Code for optimization.
