@@ -93,9 +93,6 @@ If you find our work useful, please cite:
 }
 ```
 
-# License
-DeFace is available for free, under GPL license, to use for research and educational purposes only. Please check LICENSE file.
-
 # Acknowledgements
 We built our source codes based on [NextFace](https://github.com/abdallahdib/NextFace).
 
