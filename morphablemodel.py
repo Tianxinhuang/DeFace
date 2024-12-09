@@ -1,4 +1,4 @@
-from utils import loadDictionaryFromPickle, writeDictionaryToPickle
+from utils2 import loadDictionaryFromPickle, writeDictionaryToPickle
 from normalsampler import NormalSampler
 from meshnormals import MeshNormals
 import numpy as np
@@ -47,6 +47,8 @@ class MorphableModel:
 
             print("loading shape basis...")
             self.shapeMean = torch.Tensor(self.file["shape"]["model"]["mean"]).reshape(-1, 3).to(device).float()
+            #print(self.ShapeMean)
+            #assert False
             self.shapePca = torch.Tensor(self.file["shape"]["model"]["pcaBasis"]).reshape(-1, 3, self.shapeBasisSize).to(device).float().permute(2, 0, 1)
             self.shapePcaVar = torch.Tensor(self.file["shape"]["model"]["pcaVariance"]).reshape(self.shapeBasisSize).to(device).float()
 
@@ -54,6 +56,8 @@ class MorphableModel:
             self.expressionPca = torch.Tensor(self.file["expression"]["model"]["pcaBasis"]).reshape(-1, 3, self.expBasisSize).to(device).float().permute(2, 0, 1)
             self.expressionPcaVar = torch.Tensor(self.file["expression"]["model"]["pcaVariance"]).reshape(self.expBasisSize).to(device).float()
             self.faces = torch.Tensor(np.transpose(self.file["shape"]["representer"]["cells"])).reshape(-1, 3).to(device).long()
+            #print(self.faces.shape)
+            #assert False
             self.file.close()
 
             print("Loading Albedo model from " + pathAlbedoModel + "...")
@@ -95,7 +99,11 @@ class MorphableModel:
 
             dict = loadDictionaryFromPickle(pathPickleFileName)
             self.shapeMean = torch.tensor(dict['shapeMean']).to(device)
+            #print(self.shapeMean)
+            #assert False
             self.shapePca = torch.tensor(dict['shapePca']).to(device)
+            #print(self.shapePca.shape)
+            #assert False
             self.shapePcaVar = torch.tensor(dict['shapePcaVar']).to(device)
 
             self.diffuseAlbedoMean = torch.tensor(dict['diffuseAlbedoMean']).to(device)
@@ -149,6 +157,8 @@ class MorphableModel:
         print("loading landmarks association file...")
         self.landmarksAssociation = torch.tensor(np.loadtxt(pathLandmarks, delimiter='\t\t')[:, 1].astype(np.int64)).to(device)
         self.landmarksMask = torch.tensor(np.loadtxt(pathLandmarks, delimiter='\t\t')[:, 0].astype(np.int64)).to(device)
+        #print(self.landmarksAssociation.shape)
+        #assert False
 
         print('creating sampler...')
         self.sampler = NormalSampler(self)
@@ -165,13 +175,18 @@ class MorphableModel:
         baryCenterWeights = self.uvParametrization['uvFaces']
         oFaces = self.uvParametrization['uvMapFaces']
         uvxyMap = self.uvParametrization['uvXYMap']
+        #print(oFaces.shape)
+        #print(baryCenterWeights.shape)
+        #assert False
 
         neighboors = torch.arange(self.faces.shape[-1], dtype = torch.int64, device = self.faces.device)
-
         texture = (baryCenterWeights[:, neighboors, None] * albedo[:, self.faces[oFaces[:, None], neighboors]]).sum(dim=-2)
+        #print(baryCenterWeights[:, neighboors, None].shape,albedo[:, self.faces[oFaces[:, None], neighboors]].shape)
+        #assert False
         textures = torch.zeros((albedo.size(0), textureSize, textureSize, 3), dtype=torch.float32, device = self.faces.device)
         textures[:, uvxyMap[:, 0], uvxyMap[:, 1]] = texture
         textures[:, halfRes, :, :] = (textures[:, halfRes -1, :, :] + textures[:, halfRes + 1, :, :]) * 0.5
+        #print(textures)
         return textures.permute(0, 2, 1, 3).flip([1])
 
     def getTextureResolution(self):
@@ -237,8 +252,23 @@ class MorphableModel:
         vertices = self.computeShape(shapeCoeff, expCoeff)
         diffAlbedo = self.computeDiffuseAlbedo(albedoCoeff)
         specAlbedo = self.computeSpecularAlbedo(albedoCoeff)
+        #print(self.shapeMean)
+        #print(vertices)
+        #assert False
         return vertices, diffAlbedo, specAlbedo
+#    def computeShapeAlbedo(self, albedoCoeff):
+        '''
+        compute vertices  and diffuse/specular albedo from shape, exp and albedo coeff
+        :param shapeCoeff: tensor [n, self.shapeBasisSize]
+        :param expCoeff: tensor [n, self.expBasisSize]
+        :param albedoCoeff: tensor [n, self.albedoBasisSize]
+        :return: vertices [n, verticesNumber 3], diffuse albedo [n, verticesNumber 3], specAlbedo albedo [n, verticesNumber 3]
+        '''
 
+        #vertices = self.computeShape(shapeCoeff, expCoeff)
+#        diffAlbedo = self.computeDiffuseAlbedo(albedoCoeff)
+#        specAlbedo = self.computeSpecularAlbedo(albedoCoeff)
+#        return diffAlbedo, specAlbedo
     def sample(self, shapeNumber = 1):
         '''
         random sample shape, expression, diffuse and specular albedo coeffs

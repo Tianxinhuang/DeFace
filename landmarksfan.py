@@ -40,14 +40,16 @@ class LandmarksDetectorFAN:
 		if len(arr) > 1:
 			print('found multiple subjects in image. extracting landmarks for first subject only...')
 
-		landmarks = []
+		landmarks, self.wlands = [],[]
+                #self.wlands = []
 		mask = self.mask.detach().cpu().numpy()
 		for preds in arr:
-
-			preds = preds[mask]
-			subjectLandmarks = np.array([[p[0], p[1]] for p in preds])
-			landmarks.append(subjectLandmarks)
-			break #only one subject per frame
+                    self.wlands.append(np.array([[p[0], p[1]] for p in preds]))
+                    preds = preds[mask]
+                    subjectLandmarks = np.array([[p[0], p[1]] for p in preds])
+                    landmarks.append(subjectLandmarks)
+                    
+                    break #only one subject per frame
 
 		return landmarks[0]
 		return torch.tensor(landmarks, device = self.device)

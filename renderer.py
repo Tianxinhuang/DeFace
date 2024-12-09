@@ -103,6 +103,9 @@ class Renderer:
         :param envMap: [n, resX, resY, 3]
         :return: return list of pyredner scenes
         '''
+        with open('/Light_distangle/NextFace3/err.txt','w') as f:
+            f.write(str(vertices.dim())+' '+str(vertices.shape[-1])+' '+str(normal.dim())+' '+str(normal.shape[-1]))
+        #print(vertices.shape,focal.shape,envMap.shape)
         assert(vertices.dim() == 3 and vertices.shape[-1] == 3 and normal.dim() == 3 and normal.shape[-1] == 3)
         assert (indices.dim() == 2 and indices.shape[-1] == 3)
         assert (uv.dim() == 2 and uv.shape[-1] == 2)
@@ -122,6 +125,9 @@ class Renderer:
             mat = pyredner.Material(pyredner.Texture(diffuse[texIndex]),
                                     pyredner.Texture(specular[texIndex]) if specular is not None else None,
                                     pyredner.Texture(roughness[texIndex]) if roughness is not None else None)
+            #print(vertices[i].shape,indices.shape,uv.shape)
+            #print(indices.dtype)
+            #assert False
             obj = pyredner.Object(vertices[i], indices, mat, uvs=uv, normals=normal[i] if normal is not None else None)
             cam =  self.setupCamera(focal[i], self.screenWidth, self.screenHeight)
             scene = pyredner.Scene(cam, materials=[mat], objects=[obj], envmap=pyredner.EnvironmentMap(envMap[i]))

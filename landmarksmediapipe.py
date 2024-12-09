@@ -83,6 +83,6 @@ class LandmarksDetectorMediapipe:
 		clone = np.copy(image.detach().cpu().numpy() * 255.0)
 		land = landmarks.cpu().numpy()
 		for x in land:
-			cv2.circle(clone, (int(x[0]), int(x[1])), 1, (0, 0, 255), -1)
+			cv2.circle(clone, (int(x[0]), int(x[1])), 3, (255, 0, 0), -1)
 		return clone
 

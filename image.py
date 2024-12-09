@@ -16,6 +16,7 @@ def saveImage(image, fileName, gamma = 2.2):
     '''
 
     import pyredner
+    image = torch.clamp(image, 0.0, 1.0) 
     pyredner.imwrite(image.cpu().detach(), fileName, gamma = gamma)
 
 def overlayImage(background, image):
@@ -66,6 +67,7 @@ class Image:
         assert(maxRes > 0)
         print('loading image from path: ', path)
         self.device = device
+        self.imageNames = []
         numpyImage = cv2.imread(path)[..., 0:3]
         assert (numpyImage is not None)
         numpyImage = resizeImage(cv2.cvtColor(numpyImage, cv2.COLOR_BGR2RGB), int(maxRes))
@@ -91,10 +93,14 @@ class ImageFolder:
         self.imageNames = []
         supportedFormats = ['.jpg', '.jpeg', '.png']
 
-        filenames = next(walk(path), (None, None, []))[2]
+        filename = next(walk(path), (None, None, []))[2]
         width = None
         height = None
         ct = 0
+        #filenames = [name for name in list(sorted(filename, key=lambda x:int(x.split('.')[0])))]
+        #print(filename[0])
+        #print(filename[0].split('.')[0].split('-')[0])
+        filenames = [name for name in list(sorted(filename, key=lambda x:int(x.split('.')[0].split('-')[0])))]
 
         assert (len(filenames) > 0)  # no images found in the given directory
         for filename in filenames:

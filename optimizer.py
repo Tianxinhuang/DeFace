@@ -5,15 +5,28 @@ from projection import estimateCameraPosition
 from textureloss import TextureLoss
 from pipeline import Pipeline
 from config import Config
-from utils import *
+from utils2 import *
 import argparse
 import pickle
 import tqdm
 import sys
+import torch
+
+sys.path.append('faceparsing')
+from segmask import pic2mask2
+import numpy as np
+import random
+from facenet_pytorch import InceptionResnetV1
 
 class Optimizer:
 
     def __init__(self, outputDir, config):
+        torch.manual_seed(1024) #
+        torch.cuda.manual_seed(1024) #
+        np.random.seed(1024)
+        random.seed(1024)
+        torch.backends.cudnn.deterministic = True
+
         self.config = config
         self.device = config.device
         self.verbose = config.verbose
@@ -38,12 +51,81 @@ class Optimizer:
         self.outputDir = outputDir + '/'
         self.debugDir = self.outputDir + '/debug/'
         mkdir_p(self.outputDir)
-        mkdir_p(self.debugDir)
-        mkdir_p(self.outputDir + '/checkpoints/')
 
         self.vEnhancedDiffuse = None
         self.vEnhancedSpecular = None
         self.vEnhancedRoughness = None
+
+        #facenet for human loss
+        self.FaceNet = InceptionResnetV1(pretrained='vggface2', device=self.device).eval()
+        # fix parameters
+        for param in self.FaceNet.parameters():
+            param.requires_grad = False
+
+        self.idx = torch.tensor(list(range(self.pipeline.cnum)),dtype=torch.int32).to(self.device)
+
+    #Human prior constraint
+    def human_loss(self, img):
+        self.FaceNet.classify=True
+        pred_em = self.FaceNet(img)
+        prob_em = torch.softmax(pred_em, dim = 1)
+        result = (torch.ones_like(prob_em)-prob_em).square().min(1)[0]
+        result = result.mean()
+        return result
+
+   #inpics:n*w*h*c
+   #kmeans for the hue
+    def kmeans(self, inpics):
+        from sklearn.cluster import KMeans
+        from PIL import Image
+        from scipy.cluster.vq import vq, kmeans, whiten
+
+        X = inpics.cpu().numpy()#.reshape([-1,3])
+        X=X.reshape([-1,3])
+
+        kcluster = KMeans(n_clusters=16,init='random', max_iter=100000, random_state=0)
+        cluster = kcluster.fit(X)
+        cens = cluster.cluster_centers_
+        cens = torch.tensor(cens).to(self.device)#/255
+        return cens
+
+    #Global prior constraint
+    def global_loss(self,s3img,s2img,csize=3,cens=None):
+        s3img=s3img.permute(0,3,1,2)
+        s2img=s2img.permute(0,3,1,2)
+        isize=s3img.shape[2]//csize
+        bsize=s3img.shape[0]
+        import torch
+        if cens is not None:
+            cens=cens.permute(1,0)#cens.reshape([3,-1])
+            t2img=cens[None,:,:,None,None].repeat([bsize,1,1,s3img.shape[2],s3img.shape[2]])
+        else:
+            t2img=torch.nn.Unfold(kernel_size=(csize,csize),padding=csize//2, stride=1)(s2img)
+            t2img=t2img.reshape(bsize,3,csize*csize,s3img.shape[2],s3img.shape[2])#.contiguous()
+
+        t3img=s3img.unsqueeze(2)
+
+        diff=(t3img-t2img).square().sum(1,keepdim=True).min(2)[0]#/3.0
+        mindiff=diff.mean()
+        return mindiff
+
+    def softdis2(self,s3img,s2img,csize=7):
+        s3img=s3img.permute(0,3,1,2)
+        s2img=s2img.permute(0,3,1,2)
+        isize=s3img.shape[2]//csize
+        bsize=s3img.shape[0]
+        t2img=torch.nn.Unfold(kernel_size=(csize,csize),padding=csize//2, stride=1)(s2img)
+        #print(t2img.shape)
+        t2img=t2img.reshape(bsize,3,csize*csize,s3img.shape[2],s3img.shape[2])
+        t3img=s3img.unsqueeze(2)
+        result=t3img-t2img
+        return result
+
+    #Local prior constraint
+    def local_loss(self, refimage, s3):
+        refimage = refimage[...,:3]
+        idiff = ((self.softdis2(refimage, refimage, csize=5)-self.softdis2(s3,s3,csize=5)).square()).sum(1).sum(2,keepdim=True).permute(0,2,3,1)
+        return idiff
 
     def saveParameters(self, outputFileName):
 
@@ -54,12 +136,16 @@ class Optimizer:
             'vRotation': self.pipeline.vRotation.detach().cpu().numpy(),
             'vTranslation': self.pipeline.vTranslation.detach().cpu().numpy(),
             'vFocals': self.pipeline.vFocals.detach().cpu().numpy(),
-            'vShCoeffs': self.pipeline.vShCoeffs.detach().cpu().numpy(),
+            'vShCoeffs': self.pipeline.vShCoeffsn.detach().cpu().numpy(),
             'screenWidth':self.pipeline.renderer.screenWidth,
             'screenHeight': self.pipeline.renderer.screenHeight,
-            'sharedIdentity': self.pipeline.sharedIdentity
-
+            'sharedIdentity': self.pipeline.sharedIdentity,
+            'outmask': self.mlamda,
+            'light_mask': self.light_masks,
+            'content_mask': self.mlamda,
+            'light_idx': self.idx,
         }
+
         if self.vEnhancedDiffuse is not None:
             dict['vEnhancedDiffuse'] = self.vEnhancedDiffuse.detach().cpu().numpy()
         if self.vEnhancedSpecular is not None:
@@ -81,10 +167,13 @@ class Optimizer:
         self.pipeline.vRotation = torch.tensor(dict['vRotation']).to(self.device)
         self.pipeline.vTranslation = torch.tensor(dict['vTranslation']).to(self.device)
         self.pipeline.vFocals = torch.tensor(dict['vFocals']).to(self.device)
-        self.pipeline.vShCoeffs = torch.tensor(dict['vShCoeffs']).to(self.device)
+        self.pipeline.vShCoeffsn = torch.tensor(dict['vShCoeffs']).to(self.device)
         self.pipeline.renderer.screenWidth = int(dict['screenWidth'])
         self.pipeline.renderer.screenHeight = int(dict['screenHeight'])
         self.pipeline.sharedIdentity = bool(dict['sharedIdentity'])
+        self.mlamda = torch.tensor(dict['content_mask']).to(self.device)
+        self.light_masks = torch.tensor(dict['light_mask']).to(self.device)
+        self.idx = torch.tensor(dict['light_idx']).to(self.device)
 
         if "vEnhancedDiffuse" in dict:
             self.vEnhancedDiffuse = torch.tensor(dict['vEnhancedDiffuse']).to(self.device)
@@ -105,7 +194,15 @@ class Optimizer:
         self.pipeline.vRotation.requires_grad = True
         self.pipeline.vTranslation.requires_grad = True
         self.pipeline.vFocals.requires_grad = True
-        self.pipeline.vShCoeffs.requires_grad = True
+        #self.pipeline.vShCoeffs.requires_grad = True
+        #self.pipeline.vShCoeffs2.requires_grad = True
+        self.pipeline.vShCoeffsn.requires_grad = True
+        #self.pipeline.maskcen.requires_grad = True
+        #self.pipeline.maskr.requires_grad = True
+        #self.pipeline.maskl.requires_grad = True
+        #self.pipeline.tao.requires_grad = True
+
+
 
     def setImage(self, imagePath, sharedIdentity = False):
         '''
@@ -120,7 +217,6 @@ class Optimizer:
             self.inputImage = ImageFolder(imagePath, self.device, self.config.maxResolution)
 
         self.framesNumber = self.inputImage.tensor.shape[0]
-        #self.inputImage = Image(imagePath, self.device)
         self.pipeline.renderer.screenWidth = self.inputImage.width
         self.pipeline.renderer.screenHeight = self.inputImage.height
 
@@ -183,6 +279,7 @@ class Optimizer:
     def landmarkLoss(self, cameraVertices, landmarks):
         return self.pipeline.landmarkLoss(cameraVertices, landmarks, self.pipeline.vFocals, self.inputImage.center)
 
+    #Same as NextFace to optimize 3DMM geometrical parameters
     def runStep1(self):
         print("1/3 => Optimizing head pose and expressions using landmarks...", file=sys.stderr, flush=True)
         torch.set_grad_enabled(True)
@@ -191,7 +288,6 @@ class Optimizer:
             {'params': self.pipeline.vRotation, 'lr': 0.02},
             {'params': self.pipeline.vTranslation, 'lr': 0.02},
             {'params': self.pipeline.vExpCoeff, 'lr': 0.02},
-            #{'params': self.pipeline.vShapeCoeff, 'lr': 0.02}
         ]
 
         if self.config.optimizeFocalLength:
@@ -200,7 +296,6 @@ class Optimizer:
         optimizer = torch.optim.Adam(params)
         losses = []
 
-        #for iter in range(2000):
         for iter in tqdm.tqdm(range(self.config.iterStep1)):
             optimizer.zero_grad()
             vertices = self.pipeline.computeShape()
@@ -213,9 +308,7 @@ class Optimizer:
             if self.verbose:
                 print(iter, '=>', loss.item())
 
-        self.plotLoss(losses, 0, self.outputDir + 'checkpoints/stage1_loss.png')
-        self.saveParameters(self.outputDir + 'checkpoints/stage1_output.pickle')
-
+    #Optimize all 3DMM parameters, f(\cdot), g{\cdot}
     def runStep2(self):
         print("2/3 => Optimizing shape, statistical albedos, expression, head pose and scene light...", file=sys.stderr, flush=True)
         torch.set_grad_enabled(True)
@@ -223,14 +316,20 @@ class Optimizer:
         inputTensor = torch.pow(self.inputImage.tensor, self.inputImage.gamma)
 
         optimizer = torch.optim.Adam([
-            {'params': self.pipeline.vShCoeffs, 'lr': 0.005},
+            {'params': self.pipeline.vShCoeffsn, 'lr': self.config.gamma_lr},
+            {'params': self.pipeline.folding.parameters(), 'lr': 0.007},
+            {'params': self.pipeline.maskfunc.parameters(), 'lr': 0.007},
             {'params': self.pipeline.vShapeCoeff, 'lr': 0.01},
             {'params': self.pipeline.vAlbedoCoeff, 'lr': 0.007},
             {'params': self.pipeline.vExpCoeff, 'lr': 0.01},
-            {'params': self.pipeline.vRotation, 'lr': 0.001},
-            {'params': self.pipeline.vTranslation, 'lr': 0.001}
+            {'params': self.pipeline.vRotation, 'lr': 0.0001},
+            {'params': self.pipeline.vTranslation, 'lr': 0.0001}
         ])
         losses = []
+        iteri = 0
+
+        #Weights for $L_{area}$ and $L_{bin}$
+        lw=self.config.w3
 
         for iter in tqdm.tqdm(range(self.config.iterStep2 + 1)):
             optimizer.zero_grad()
@@ -239,43 +338,125 @@ class Optimizer:
             diffuseTextures = self.pipeline.morphableModel.generateTextureFromAlbedo(diffAlbedo)
             specularTextures = self.pipeline.morphableModel.generateTextureFromAlbedo(specAlbedo)
 
-            images = self.pipeline.render(cameraVerts, diffuseTextures, specularTextures)
-            mask = images[..., 3:]
-            smoothedImage = smoothImage(images[..., 0:3], self.smoothing)
-            diff = mask * (smoothedImage - inputTensor).abs()
-            #photoLoss =  diff.mean(dim=-1).sum() / float(self.framesNumber)
-            photoLoss = 1000.* diff.mean()
-            landmarksLoss = self.config.weightLandmarksLossStep2 *  self.landmarkLoss(cameraVerts, self.landmarks)
+            #$f(\cdot)$
+            selfmasks,maskl = self.pipeline.ftlayers()
 
-            regLoss = 0.0001 * self.pipeline.vShCoeffs.pow(2).mean()
-            regLoss += self.config.weightAlbedoReg * self.regStatModel(self.pipeline.vAlbedoCoeff, self.pipeline.morphableModel.diffuseAlbedoPcaVar)
+            imagelist = []
+            #Render faces under different lighting conditions
+            for i in range(self.idx.shape[0]):
+                imagelist.append(self.pipeline.render(cameraVerts, diffuseTextures, specularTextures, shcoeffs=self.pipeline.vShCoeffsn[:,self.idx[i]]).unsqueeze(1))
+            imagelist=torch.cat(imagelist,dim=1)
+
+            #Render mask $M_R$
+            mask = imagelist[:,0,:,:, 3:]
+           
+            #Do the ACE to select effective light masks after iter0
+            if iteri == self.config.iterStep0:
+                problist = (selfmasks * mask.permute(0,3,1,2)).sum([0,2,3])/mask.permute(0,3,1,2).sum()
+                vals, idx = torch.sort(problist,dim=0,descending=True)
+                print(vals)
+                sumi = 0
+                lw = self.config.w4
+                for i in range(self.pipeline.cnum):
+                    sumi+=vals[i]
+                    if vals[i]>self.config.epsilon:
+                        self.idx = idx[:i+1]
+                imagelist = imagelist[:,list(self.idx.cpu())]
+
+            cmask1=selfmasks[:,list(self.idx.cpu())]
+            cmask1 = cmask1/cmask1.sum(1).unsqueeze(1)
+            images = (cmask1.unsqueeze(-1)*imagelist).sum(1)
+
+            smoothedImage = smoothImage(images[..., 0:3].float(), self.smoothing)
+
+            #Get the results from pre-trained face region prediction network 
+            if iteri==0:
+                self.fmask = pic2mask2(inputTensor, self.landmarks.cpu().numpy()).detach().clone()
+
+            #$g(\cdot)$
+            self.fmask2 = self.pipeline.getfmask()
+            
+            #face region
+            lamda = mask * self.fmask2#
+
+            #Occlusion mask $M_o$ to get unoccluded face regions for next stage 
+            self.mlamda=lamda.detach().clone()            
+            
+            #Combining the rendered face and surroundings
+            smoothedImage = (1-lamda) * inputTensor + lamda * smoothedImage
+
+            #Loss to distillation loss $L_{seg}$
+            floss = self.config.w2*(lamda-self.fmask).square().sum(dim=[1,2]) #video 200 
+            #floss = 300 * (lamda-self.fmask).square().sum(dim=[1,2])
+            floss = floss / self.fmask.sum(dim=[1,2])
+            floss = floss.mean()
+
+            #Photometric loss
+            diff = 2.0 * mask * ((smoothedImage - inputTensor).abs())
+            photoLoss = self.config.w0 * diff.mean() 
+
+            cmean = cmask1 * mask.permute(0,3,1,2)
+            cmean2 = cmean.sum(dim=[-1,-2],keepdim=True)/mask.permute(0,3,1,2).sum(dim=[-1,-2],keepdim=True)
+            cmean = cmask1.mean(dim=1,keepdim=True)
+
+            #$L_{area}$
+            maskrloss  = 1 *((-(cmask1-cmean).square()).exp() * mask.permute(0,3,1,2)).sum()/mask.sum()-1
+            #$L_{bin}$
+            maskrloss2 = 1 *((-(cmask1-cmean2).square()).exp() * mask.permute(0,3,1,2)).sum()/mask.sum()-1
+
+            if iteri <= 100:
+                maskrloss = maskrloss
+            else:
+                maskrloss = maskrloss2
+ 
+            #Same losses as NextFace
+            landmarksLoss = self.config.w1 * self.config.weightLandmarksLossStep2 *  self.landmarkLoss(cameraVerts, self.landmarks)
+            regLoss = 0.0001 * self.pipeline.vShCoeffsn.pow(2).mean()#+0.0001 * self.pipeline.vShCoeffs2.pow(2).mean()
+            regLoss += 1.0 * self.regStatModel(self.pipeline.vAlbedoCoeff, self.pipeline.morphableModel.diffuseAlbedoPcaVar)
             regLoss += self.config.weightShapeReg * self.regStatModel(self.pipeline.vShapeCoeff, self.pipeline.morphableModel.shapePcaVar)
             regLoss += self.config.weightExpressionReg * self.regStatModel(self.pipeline.vExpCoeff, self.pipeline.morphableModel.expressionPcaVar)
 
             loss = photoLoss + landmarksLoss + regLoss
+            loss += floss #$L_{seg}$
+            loss += lw * maskrloss #$L_{area}$ or $L_{bin}$
 
             losses.append(loss.item())
             loss.backward()
             optimizer.step()
+            iteri += 1
+
             if self.verbose:
                 print(iter, ' => Loss:', loss.item(),
                       '. photo Loss:', photoLoss.item(),
                       '. landmarks Loss: ', landmarksLoss.item(),
-                      '. regLoss: ', regLoss.item())
+                      '. regLoss: ', regLoss.item(),
+                      '. maskLoss: ', maskrloss.item(),)
 
-            if self.config.debugFrequency > 0 and iter % self.config.debugFrequency == 0:
-                self.debugFrame(smoothedImage, inputTensor, diffuseTextures, specularTextures, self.pipeline.vRoughness, self.debugDir + 'debug1_iter' + str(iter))
 
-        self.plotLoss(losses, 1, self.outputDir + 'checkpoints/stage2_loss.png')
-        self.saveParameters(self.outputDir + 'checkpoints/stage2_output.pickle')
+        self.vEnhancedDiffuse = diffuseTextures.detach().clone()
+        self.vEnhancedSpecular = specularTextures.detach().clone()
+        self.vEnhancedRoughness = self.pipeline.vRoughness.detach().clone() if self.vEnhancedRoughness is None else self.vEnhancedRoughness.detach().clone()
 
+    def gradient(self, inputs, outputs, create_graph=True, retain_graph=True):
+        d_points = torch.ones_like(outputs, requires_grad=False, device=outputs.device)
+        points_grad = torch.autograd.grad(
+            outputs=outputs,
+            inputs=inputs,
+            grad_outputs=d_points,
+            create_graph=create_graph,
+            retain_graph=retain_graph,
+            only_inputs=True)[0]#[:, -3:]
+        return points_grad
+
+    #Tuning the texture T, f(\cdot), lighting conditions
     def runStep3(self):
         print("3/3 => finetuning albedos, shape, expression, head pose and scene light...", file=sys.stderr, flush=True)
         torch.set_grad_enabled(True)
         self.pipeline.renderer.samples = 8
 
         inputTensor = torch.pow(self.inputImage.tensor, self.inputImage.gamma)
-        vertices, diffAlbedo, specAlbedo = self.pipeline.morphableModel.computeShapeAlbedo(self.pipeline.vShapeCoeff, self.pipeline.vExpCoeff, self.pipeline.vAlbedoCoeff)
+        vertices, diffAlbedo, specAlbedo = self.pipeline.morphableModel.computeShapeAlbedo(self.pipeline.vShapeCoeff, self.pipeline.vExpCoeff, self.pipeline.vAlbedoCoeff) 
+
         vDiffTextures = self.pipeline.morphableModel.generateTextureFromAlbedo(diffAlbedo).detach().clone() if self.vEnhancedDiffuse is None else self.vEnhancedDiffuse.detach().clone()
         vSpecTextures = self.pipeline.morphableModel.generateTextureFromAlbedo(specAlbedo).detach().clone() if self.vEnhancedSpecular is None else self.vEnhancedSpecular.detach().clone()
         vRoughTextures = self.pipeline.vRoughness.detach().clone() if self.vEnhancedRoughness is None else self.vEnhancedRoughness.detach().clone()
@@ -287,60 +468,126 @@ class Optimizer:
         vSpecTextures.requires_grad = True
         vRoughTextures.requires_grad = True
 
+        #Hue calculated with K-means
+        cens = self.kmeans(refDiffTextures)
+
         optimizer = torch.optim.Adam([
-            {'params': self.pipeline.vShCoeffs, 'lr': 0.005 * 2.},
-            {'params': vDiffTextures, 'lr': 0.005 },
-            {'params': vSpecTextures, 'lr': 0.02},
-            {'params': vRoughTextures, 'lr': 0.02},
-            {'params': self.pipeline.vShapeCoeff, 'lr': 0.01},
-            {'params': self.pipeline.vExpCoeff, 'lr': 0.01},
-            {'params': self.pipeline.vRotation, 'lr': 0.0005},
-            {'params': self.pipeline.vTranslation, 'lr': 0.0005}
+            {'params': vDiffTextures, 'lr': 0.005},
+            {'params': vSpecTextures, 'lr': 0.005},
+            {'params': vRoughTextures, 'lr': 0.01},
+            {'params': self.pipeline.folding.parameters(), 'lr': 0.001},
+            {'params': self.pipeline.vShCoeffsn, 'lr': 0.001},
         ])
         losses = []
+
+        #Mask to fiter the gradients not in the texture regions
+        a,b,c,d=vDiffTextures.shape
+        gmask = torch.ones([a,b,c,1], dtype=torch.float32, device=self.device)
+        rmask = torch.where(vDiffTextures.sum(-1,keepdim=True)>1e-5,gmask,torch.zeros_like(gmask))
+
+        refdiffuseAlbedo = self.pipeline.render(diffuseTextures=refDiffTextures, renderAlbedo=True)
+        refspecularAlbedo = self.pipeline.render(diffuseTextures=refSpecTextures, renderAlbedo=True)
+        refroughnessAlbedo = self.pipeline.render(diffuseTextures=refRoughTextures.repeat(1, 1, 1, 3), renderAlbedo=True)
 
         for iter in tqdm.tqdm(range(self.config.iterStep3 + 1)):
             optimizer.zero_grad()
             vertices, diffAlbedo, specAlbedo = self.pipeline.morphableModel.computeShapeAlbedo(self.pipeline.vShapeCoeff, self.pipeline.vExpCoeff, self.pipeline.vAlbedoCoeff)
             cameraVerts = self.pipeline.camera.transformVertices(vertices, self.pipeline.vTranslation, self.pipeline.vRotation)
+            
+            diffuseAlbedo = self.pipeline.render(diffuseTextures=vDiffTextures, renderAlbedo=True)
+            specularAlbedo = self.pipeline.render(diffuseTextures=vSpecTextures, renderAlbedo=True)
+            roughnessAlbedo = self.pipeline.render(diffuseTextures=vRoughTextures.repeat(1, 1, 1, 3), renderAlbedo=True)
 
-            images = self.pipeline.render(cameraVerts, vDiffTextures, vSpecTextures, vRoughTextures)
-            mask = images[..., 3:]
-            smoothedImage = smoothImage(images[..., 0:3], self.smoothing)
-            diff = mask * (smoothedImage - inputTensor).abs()
+            blist=[]
+            
+            #GP Loss
+            loss_global = self.global_loss(vDiffTextures,refDiffTextures,13, cens)
 
-            #loss =  diff.mean(dim=-1).sum() / float(self.framesNumber)
-            loss = 1000.0 * diff.mean()
+            #HP Loss calculated under multiple lighting conditions
+            imagelist=[]
+            for i in range(self.idx.shape[0]):
+                img_ref = self.pipeline.render(cameraVerts, vDiffTextures, vSpecTextures, vRoughTextures, shcoeffs=self.pipeline.vShCoeffsn[:,self.idx[i]])
+                imagelist.append(img_ref.unsqueeze(1))
+                loss_idi = self.human_loss((img_ref[...,:3]).float().permute(0,3,1,2))
+                blist.append(loss_idi)
+            imagelist=torch.cat(imagelist,dim=1)
+            loss_hp = sum(blist)/len(blist)
+
+            #Masks for different lighting conditions
+            selfmasks,maskl = self.pipeline.ftlayers()
+
+            #Use lighting masks to combine face images
+            vcmask11=selfmasks[:,list(self.idx.cpu())]
+            vcmask11 = vcmask11/vcmask11.sum(1).unsqueeze(1)
+            images = (vcmask11.unsqueeze(-1)*imagelist).sum(1)
+
+            #Use render mask to get the face region
+            mask = imagelist[:,0,:,:, 3:]
+            self.light_masks = (vcmask11 * mask.permute(0,3,1,2)).unsqueeze(-1)
+            smoothedImage = smoothImage(images[..., 0:3].float(), self.smoothing)
+            s0=smoothedImage
+
+            #Occlusion mask is not updated anymore in Stage 3
+            lamda = self.mlamda
+
+            #Get rendered smoothed faces and textures in the face space
+            smoothedImage = (1-lamda) * inputTensor + lamda * smoothedImage
+            diffuseAlbedo = (diffuseAlbedo * (1-lamda) + diffuseAlbedo.detach().clone() * lamda)[...,:3]
+            specularAlbedo = (specularAlbedo * (1-lamda) + specularAlbedo.detach().clone() * lamda)[...,:3]
+            roughnessAlbedo = (roughnessAlbedo * (1-lamda) + roughnessAlbedo.detach().clone() * lamda)[...,:3]
+
+            #Calculate the $LP Loss$
+            idiff = mask * (5*self.local_loss(refdiffuseAlbedo, diffuseAlbedo) + 6*self.local_loss(refspecularAlbedo, specularAlbedo) + self.local_loss(refroughnessAlbedo, roughnessAlbedo))
+            loss_local = (idiff.sum(dim=[1,2])/mask.sum(dim=[1,2])).mean()
+
+            #calculate the $L_{bin}$
+            cmean = vcmask11 * mask.permute(0,3,1,2)
+            cmean = cmean.sum(dim=[-1,-2],keepdim=True)/mask.permute(0,3,1,2).sum(dim=[-1,-2],keepdim=True)
+            maskrloss = ((-(vcmask11-cmean).square()).exp() * mask.permute(0,3,1,2)).sum()/mask.sum() -1
+
+            #Same constraints as NextFace
+            diff =  mask * (smoothedImage - inputTensor).abs()
+            loss = 2 * self.config.w0 * diff.mean() 
             loss += 0.2 * (self.textureLoss.regTextures(vDiffTextures, refDiffTextures, ws = self.config.weightDiffuseSymmetryReg, wr =  self.config.weightDiffuseConsistencyReg, wc = self.config.weightDiffuseConsistencyReg, wsm = self.config.weightDiffuseSmoothnessReg, wm = 0.) + \
                     self.textureLoss.regTextures(vSpecTextures, refSpecTextures, ws = self.config.weightSpecularSymmetryReg, wr = self.config.weightSpecularConsistencyReg, wc = self.config.weightSpecularConsistencyReg, wsm = self.config.weightSpecularSmoothnessReg, wm = 0.5) + \
                     self.textureLoss.regTextures(vRoughTextures, refRoughTextures, ws = self.config.weightRoughnessSymmetryReg, wr = self.config.weightRoughnessConsistencyReg, wc = self.config.weightRoughnessConsistencyReg, wsm = self.config.weightRoughnessSmoothnessReg, wm = 0.))
-            loss += 0.0001 * self.pipeline.vShCoeffs.pow(2).mean()
+            loss += 0.0001 * self.pipeline.vShCoeffsn.pow(2).mean()
             loss += self.config.weightExpressionReg * self.regStatModel(self.pipeline.vExpCoeff, self.pipeline.morphableModel.expressionPcaVar)
             loss += self.config.weightShapeReg * self.regStatModel(self.pipeline.vShapeCoeff, self.pipeline.morphableModel.shapePcaVar)
             loss += self.config.weightLandmarksLossStep3 * self.landmarkLoss(cameraVerts, self.landmarks)
 
-            losses.append(loss.item())
+            loss += 5.0 * maskrloss #$L_{bin}$
+            loss += self.config.w7 * loss_hp #HP Loss
+            loss += self.config.w6 * loss_local #LP Loss
+            loss += self.config.w5 * loss_global #GP Loss
 
-            loss.backward()
+            losses.append(loss.item())
+            loss.backward(retain_graph=True)
+
+            #Reduce the noises beyond the texture regions by remove possible gradients
+            vDiffTextures.grad *= rmask
+            vSpecTextures.grad *= rmask
             optimizer.step()
+
             if self.verbose:
                 print(iter, ' => Loss:', loss.item())
-
-            if self.config.debugFrequency > 0 and  iter % self.config.debugFrequency == 0:
-                self.debugFrame(smoothedImage, inputTensor, vDiffTextures, vSpecTextures, vRoughTextures, self.debugDir + 'debug2_iter' + str(iter))
-
-        self.plotLoss(losses, 2, self.outputDir + 'checkpoints/stage3_loss.png')
 
         self.vEnhancedDiffuse = vDiffTextures.detach().clone()
         self.vEnhancedSpecular = vSpecTextures.detach().clone()
         self.vEnhancedRoughness = vRoughTextures.detach().clone()
 
-        self.saveParameters(self.outputDir + 'checkpoints/stage3_output.pickle')
-
-    def saveOutput(self, samples,  outputDir = None, prefix = ''):
+    #Save pictures including occlusion masks, light masks, rendered faces, textures...
+    def savepics(self, samples,  outputDir = None, prefix = ''):
         if outputDir is None:
             outputDir = self.outputDir
             mkdir_p(outputDir)
+
+        self.namelist=[]
+
+        if len(self.inputImage.imageNames)==0:
+            self.namelist.append(self.inputImage.imageName)
+        else:
+            self.namelist=self.inputImage.imageNames
 
         print("saving to: '", outputDir, "'. hold on... ", file=sys.stderr, flush=True)
         outputDir += '/' #use join
@@ -359,133 +606,56 @@ class Optimizer:
             vSpecTextures = self.pipeline.morphableModel.generateTextureFromAlbedo(specAlbedo)
             vRoughTextures = self.pipeline.vRoughness
 
-
         self.pipeline.renderer.samples = samples
-        images = self.pipeline.render(None, vDiffTextures, vSpecTextures, vRoughTextures)
+
+        imagelist=[]
+        print_id = 0
+        for i in range(self.idx.shape[0]):
+            imagelist.append(self.pipeline.render(cameraVerts, vDiffTextures, vSpecTextures, vRoughTextures, shcoeffs=self.pipeline.vShCoeffsn[:,self.idx[i]]).unsqueeze(1))
+
+            for print_id in range(len(self.namelist)):
+                saveImage(imagelist[-1][print_id].squeeze(), outputDir + prefix + 'light_render'+str(print_id)+'_'+str(i)+'.png')
+                saveImage(self.light_masks[print_id][i].repeat(1,1,3), outputDir + prefix + 'light_mask'+str(print_id)+'_'+str(i)+'.png')
+
+        imagelist=torch.cat(imagelist,dim=1)
+        images = (self.light_masks*imagelist).sum(1)#[...,:3]
+
+        mask = images[...,3:]
+        images0 = images
+        images = self.mlamda * images[...,:3] + (1-self.mlamda) * inputTensor[...,:3]
+        images = torch.cat([images,mask],-1)
+
+        occlusion = (1-self.mlamda)* mask * inputTensor[...,:3]
+        face = self.mlamda * images0[...,:3]
+        oface = mask * images0[...,:3]
+        occlusion_mask = (1-self.mlamda) * mask
+        face_mask = self.mlamda
+        maskface = self.mlamda * inputTensor[...,:3]
+        envir = (1-mask) * inputTensor[...,:3]
+        fullmask = mask
+
+        for i in range(len(self.namelist)):
+
+            saveImage(face_mask[i].repeat(1,1,3), outputDir + prefix + 'occlu_face_mask_'+str(i)+'.png')
+            saveImage(occlusion_mask[i].repeat(1,1,3), outputDir + prefix + 'occlu_outer_mask_'+str(i)+'.png')
+            saveImage(face[i], outputDir + prefix + 'occlu_face_'+str(i)+'.png')
+            saveImage(maskface[i], outputDir + prefix + 'mask_face_'+str(i)+'.png')
+            saveImage(occlusion[i], outputDir + prefix + 'occlu_outer_'+str(i)+'.png')
+            saveImage(envir[i], outputDir + prefix + 'envir_'+str(i)+'.png')
+            saveImage(oface[i], outputDir + prefix + 'full_face_'+str(i)+'.png')
+            saveImage(fullmask[i].repeat(1,1,3), outputDir + prefix + 'full_mask_'+str(i)+'.png')
+
+
+            overlay = overlayImage(inputTensor[i], images0[i])
+            saveImage(torch.cat([overlay.to(self.device), torch.ones_like(images[i])[..., 3:]], dim = -1), outputDir + self.namelist[i].split('.')[0] + '_face'+'.png')
+
+            overlay = overlayImage(inputTensor[i], images[i])
+            saveImage(torch.cat([overlay.to(self.device), torch.ones_like(images[i])[..., 3:]], dim = -1), outputDir + self.namelist[i].split('.')[0] + '_merge'+'.png')
 
         diffuseAlbedo = self.pipeline.render(diffuseTextures=vDiffTextures, renderAlbedo=True)
         specularAlbedo = self.pipeline.render(diffuseTextures=vSpecTextures, renderAlbedo=True)
         roughnessAlbedo = self.pipeline.render(diffuseTextures=vRoughTextures.repeat(1, 1, 1, 3), renderAlbedo=True)
-        illum = self.pipeline.render(diffuseTextures=torch.ones_like(vDiffTextures), specularTextures=torch.zeros_like(vDiffTextures))
 
-        for i in range(diffuseAlbedo.shape[0]):
-            saveObj(outputDir + prefix + '/mesh' + str(i) + '.obj',
-                    'material' + str(i) + '.mtl',
-                    cameraVerts[i],
-                    self.pipeline.faces32,
-                    cameraNormals[i],
-                    self.pipeline.morphableModel.uvMap,
-                    prefix + 'diffuseMap_' + str(self.getTextureIndex(i)) + '.png')
-
-            envMaps = self.pipeline.sh.toEnvMap(self.pipeline.vShCoeffs, self.config.smoothSh) #smooth
-            ext = '.png'
-            if self.config.saveExr:
-                ext = '.exr'
-            saveImage(envMaps[i], outputDir + '/envMap_' + str(i) + ext)
-
-            #saveImage(diffuseAlbedo[self.getTextureIndex(i)],  outputDir + prefix +  'diffuse_' + str(self.getTextureIndex(i)) + '.png')
-            #saveImage(specularAlbedo[self.getTextureIndex(i)], outputDir + prefix + 'specular_' + str(self.getTextureIndex(i)) + '.png')
-            #saveImage(roughnessAlbedo[self.getTextureIndex(i)], outputDir + prefix + 'roughness_' + str(self.getTextureIndex(i)) + '.png')
-            #saveImage(illum[i], outputDir + prefix + 'illumination_' + str(i) + '.png')
-            #saveImage(images[i], outputDir + prefix + 'finalReconstruction_' + str(i) + '.png')
-            overlay = overlayImage(inputTensor[i], images[i])
-            #saveImage(overlay, outputDir + '/overlay_' + str(i) + '.png')
-
-            renderAll = torch.cat([torch.cat([inputTensor[i], torch.ones_like(images[i])[..., 3:]], dim = -1),
-                           torch.cat([overlay.to(self.device), torch.ones_like(images[i])[..., 3:]], dim = -1),
-                           images[i],
-                           illum[i],
-                           diffuseAlbedo[self.getTextureIndex(i)],
-                           specularAlbedo[self.getTextureIndex(i)],
-                          roughnessAlbedo[self.getTextureIndex(i)]], dim=1)
-            saveImage(renderAll, outputDir + '/render_' + str(i) + '.png')
-
-            saveImage(vDiffTextures[self.getTextureIndex(i)], outputDir + prefix + 'diffuseMap_' + str(self.getTextureIndex(i)) + '.png')
-            saveImage(vSpecTextures[self.getTextureIndex(i)], outputDir + prefix + 'specularMap_' + str(self.getTextureIndex(i)) + '.png')
-            saveImage(vRoughTextures[self.getTextureIndex(i)].repeat(1, 1, 3), outputDir + prefix  + 'roughnessMap_' + str(self.getTextureIndex(i)) + '.png')
-
-    def run(self, imagePathOrDir, sharedIdentity = False, checkpoint = None, doStep1 = True, doStep2 = True, doStep3 = True):
-        '''
-        run optimization on given path (can be a directory that contains images with same resolution or a direct path to an image)
-        :param imagePathOrDir: a path to a directory or image
-        :param sharedIdentity: if True, the images in the directory belongs to the same subject so the shape identity and skin reflectance are shared across all images
-        :param checkpoint: a path to a  checkpoint file (pickle)  to resume optim (check saveParameters and loadParameters)
-        :param doStep1: if True do stage 1 optim (landmarks loss)
-        :param doStep2: if True do stage 2 optim (photo loss on statistical prior)
-        :param doStep3: if True do stage 3 optim ( refine albedos)
-        :return:
-        '''
-
-
-        self.setImage(imagePathOrDir, sharedIdentity)
-        assert(self.framesNumber >= 1) #could not load any image from path
-
-        if checkpoint is not None and checkpoint != '':
-            print('resuming optimization from checkpoint: ',checkpoint, file=sys.stderr, flush=True)
-            self.loadParameters(checkpoint)
-
-        import time
-        start = time.time()
-        if doStep1:
-            self.runStep1()
-            if self.config.saveIntermediateStage:
-                self.saveOutput(self.config.rtSamples, self.outputDir + '/outputStage1', prefix='stage1_')
-        if doStep2:
-            self.runStep2()
-            if self.config.saveIntermediateStage:
-                self.saveOutput(self.config.rtSamples, self.outputDir + '/outputStage2', prefix='stage2_')
-        if doStep3:
-            self.runStep3()
-        end = time.time()
-        print("took {:.2f} minutes to optimize".format((end - start) / 60.), file=sys.stderr, flush=True)
-        self.saveOutput(self.config.rtSamples, self.outputDir)
-
-if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=False, default='./input/s1.png', help="path to a directory or image to reconstruct (images in same directory should have the same resolution")
-
-    parser.add_argument("--sharedIdentity", dest='sharedIdentity', action='store_true', help='in case input directory contains multiple images, this flag tells the optimizations that all images are for the same person ( that means the identity shape and skin reflectance is common for all images), if this flag is false, that each image belong to a different subject', required=False)
-    #parser.add_argument("--no-sharedIdentity", dest='sharedIdentity', action='store_false', help='in case input directory contains multiple images, this flag tells the optimizations that all images are for the same person ( that means the identity shape and skin reflectance is common for all images), if this flag is false, that each image belong to a different subject', required=False)
-
-    parser.add_argument("--output", required=False, default='./output/', help="path to the output directory where optimization results are saved in")
-    parser.add_argument("--config", required=False, default='./optimConfig.ini', help="path to the configuration file (used to configure the optimization)")
-
-    parser.add_argument("--checkpoint", required=False, default='', help="path to a checkpoint pickle file used to resume optimization")
-    parser.add_argument("--skipStage1", dest='skipStage1', action='store_true', help='if true, the first (coarse) stage is skipped (stage1). useful if u want to resume optimization from a checkpoint', required=False)
-    parser.add_argument("--skipStage2", dest='skipStage2', action='store_true', help='if true, the second stage is skipped (stage2).  useful if u want to resume optimization from a checkpoint', required=False)
-    parser.add_argument("--skipStage3", dest='skipStage3', action='store_true', help='if true, the third stage is skipped (stage3).  useful if u want to resume optimization from a checkpoint', required=False)
-    params = parser.parse_args()
-
-    inputDir = params.input
-    sharedIdentity = params.sharedIdentity
-    outputDir = params.output + '/' + os.path.basename(inputDir.strip('/'))
-
-    configFile = params.config
-    checkpoint = params.checkpoint
-    doStep1 = not params.skipStage1
-    doStep2 = not params.skipStage2
-    doStep3 = not params.skipStage3
-
-    config = Config()
-    config.fillFromDicFile(configFile)
-    if config.device == 'cuda' and torch.cuda.is_available() == False:
-        print('[WARN] no cuda enabled device found. switching to cpu... ')
-        config.device = 'cpu'
-
-    #check if mediapipe is available
-
-    if config.lamdmarksDetectorType == 'mediapipe':
-        try:
-            from  landmarksmediapipe import LandmarksDetectorMediapipe
-        except:
-            print('[WARN] Mediapipe for landmarks detection not availble. falling back to FAN landmarks detector. You may want to try Mediapipe because it is much accurate than FAN (pip install mediapipe)')
-            config.lamdmarksDetectorType = 'fan'
-
-    optimizer = Optimizer(outputDir, config)
-    optimizer.run(inputDir,
-                  sharedIdentity= sharedIdentity,
-                  checkpoint= checkpoint,
-                  doStep1= doStep1,
-                  doStep2 = doStep2,
-                  doStep3= doStep3)
+        saveImage(diffuseAlbedo[self.getTextureIndex(i)], outputDir + prefix + 'diffuseMap.png')
+        saveImage(specularAlbedo[self.getTextureIndex(i)], outputDir + prefix + 'specularMap.png')
+        saveImage(roughnessAlbedo[self.getTextureIndex(i)], outputDir + prefix  + 'roughnessMap.png')

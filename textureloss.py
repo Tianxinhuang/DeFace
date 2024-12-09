@@ -20,7 +20,7 @@ class TextureLoss:
 		:param wm: mean regularizer
 		:return: scalar loss
 		'''
-		symReg = (vTex - vTex.flip([2])).abs().mean()  # symmetry regularizer on vertical axis
+		symReg = 1.0*(vTex - vTex.flip([2])).abs().mean()  # symmetry regularizer on vertical axis
 		rgbReg = (vTex - refTex).abs().mean()  # rgb regularization with respect to reference texture
 		loss = ws * symReg + wr * rgbReg
 
