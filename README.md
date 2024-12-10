@@ -26,7 +26,7 @@
 pip install -r requirements.txt
 ```
 
-4. We introduce [BiSeNet](https://github.com/zllrunning/face-parsing.PyTorch) for the segmentation of face region. Please download its[checkpoint](https://drive.google.com/file/d/1vYrfG-pXzU4g_YGDHWcJDtwXaVykx4Qt/view?usp=drive_link) and put it under (`faceparsing/res/cp`)
+4. We introduce [BiSeNet](https://github.com/zllrunning/face-parsing.PyTorch) for the segmentation of face region. Please download its [checkpoint](https://drive.google.com/file/d/1vYrfG-pXzU4g_YGDHWcJDtwXaVykx4Qt/view?usp=drive_link) and put it under (`faceparsing/res/cp`)
 
 5. Please download the [baselMorphableModel](https://drive.google.com/file/d/13hsGFaAVgEde60hD9OxV5X0wfZoC7zvh/view?usp=drive_link) and unzip it under the dir. 
 
@@ -76,7 +76,7 @@ For example, if you want to conduct experiments on single images from Voxceleb2 
 python3 evaluate.py --configs cfgs/vox2_img.ini --input_dir shadow_data/voxceleb_pics --output_dir output_pics --ckpt_dir output_ckpts >log.txt
 ```
 
-The evaluation would be:
+After optimization, the evaluation would be:
 
 ```
 python3 python3 metrics.py --input_dir shadow_data/voxceleb_pics --output_dir output_pics --result_dir result.txt
