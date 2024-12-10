@@ -11,7 +11,7 @@
 ## TODO List and ETA
 - [x] Code for optimization.
 
-- [ ] Upload datasets and other adopted data (expected before 2024-12-11).
+- [x] Upload datasets and other adopted data.
 
 
 ## Installation
@@ -26,11 +26,11 @@
 pip install -r requirements.txt
 ```
 
-4. We introduce [BiSeNet](https://github.com/zllrunning/face-parsing.PyTorch) for the segmentation of face region. Please download its checkpoint ('79999.pth') and put it under ('faceparsing/res/cp')
+4. We introduce [BiSeNet](https://github.com/zllrunning/face-parsing.PyTorch) for the segmentation of face region. Please download its[checkpoint](https://drive.google.com/file/d/1vYrfG-pXzU4g_YGDHWcJDtwXaVykx4Qt/view?usp=drive_link) and put it under (`faceparsing/res/cp`)
 
-5. Please download the [baselMorphableModel]() and unzip it under the dir. 
+5. Please download the [baselMorphableModel](https://drive.google.com/file/d/13hsGFaAVgEde60hD9OxV5X0wfZoC7zvh/view?usp=drive_link) and unzip it under the dir. 
 
-The sub-folders under ('Deface') should be organized as
+The sub-folders under (`Deface`) should be organized as
 
 ```
 Deface/
@@ -47,6 +47,8 @@ Deface/
 └── ...
 ```
 
+6. Download our [data collection](https://drive.google.com/file/d/1EDxHPe35WLn15jprmWkSbs0FLolrXN0y/view?usp=sharing), and run the codes on them.
+
 ## How to Use
 
 Just replace following dirs with your own ones, and run the optimization with:
@@ -55,7 +57,9 @@ Just replace following dirs with your own ones, and run the optimization with:
 python3 evaluate.py --configs your_config_dir --input_dir your_img_dir --output_dir your_output_dir --ckpt_dir your_ckpt_dir >log.txt
 ```
 
-We have provided 4 different config files for our evaluation data in the ('cfgs') dir. You can also adjust the hyper-parameters for your own data.
+We have provided 4 different config files for our evaluation data in the (`cfgs`) dir. You can also adjust the hyper-parameters for your own data.
+
+For example, if you want to conduct experiments on single images from Voxceleb2 downloaded in (`shadow_data/voxceleb_pics`), the command to optimize would be:
 
 
 After running the optimization, you can evaluate the performances by:
@@ -64,7 +68,21 @@ After running the optimization, you can evaluate the performances by:
 python3 metrics.py --input_dir your_img_dir --output_dir your_output_dir --result_dir your_result_file.txt
 ```
 
-Then, the quantitative results would be written into the ('--result_dir').
+Then, the quantitative results would be written into the (`--result_dir`).
+
+For example, if you want to conduct experiments on single images from Voxceleb2 downloaded in (`shadow_data/voxceleb_pics`), the command to optimize would be:
+
+```
+python3 evaluate.py --configs cfgs/vox2_img.ini --input_dir shadow_data/voxceleb_pics --output_dir output_pics --ckpt_dir output_ckpts >log.txt
+```
+
+The evaluation would be:
+
+```
+python3 python3 metrics.py --input_dir shadow_data/voxceleb_pics --output_dir output_pics --result_dir result.txt
+```
+
+The results would be written into (`result.txt`).
 
 
 
