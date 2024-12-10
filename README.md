@@ -85,7 +85,6 @@ python3 python3 metrics.py --input_dir shadow_data/voxceleb_pics --output_dir ou
 The results would be written into (`result.txt`).
 
 
-
 ## Citation
 
 If you find our work useful, please cite:
@@ -112,7 +111,7 @@ If you find our work useful, please cite:
 ```
 
 # Acknowledgements
-We built our source codes based on [NextFace](https://github.com/abdallahdib/NextFace).
+We built our source codes based on [NextFace](https://github.com/abdallahdib/NextFace). Following NextFace, the uvmap is taken from [here](https://github.com/unibas-gravis/parametric-face-image-generator/blob/master/data/regions/face12.json), landmarks prediction from [here](https://github.com/kimoktm/Face2face/blob/master/data/custom_mapping.txt). [redner](https://github.com/BachiLi/redner/) is used for ray tracing, albedoMM model from [here](https://github.com/waps101/AlbedoMM/) is introduced for the texture modeling.
 
 
 # contact 
