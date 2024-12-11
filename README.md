@@ -15,20 +15,37 @@
 
 
 ## Installation
+We suggest to use Anaconda for configuration:
 
-1. Clone/download this repositry;
+1. Clone/download this repositry, create a new conda env: 
 
-2. Install Cuda 11.1;
+```
+conda create -n deface python=3.8.5
+```
 
-3. run: 
+and then activate it by (`conda activate deface`)
+
+2. Install Cuda 11.3 by: 
+
+```
+conda install -c "nvidia/label/cuda-11.3.1" cuda
+```
+
+3. Install Torch by running:
+
+```
+pip install torch==1.11.0+cu113 torchvision==0.12.0+cu113 torchaudio==0.11.0 --extra-index-url https://download.pytorch.org/whl/cu113
+```
+
+4. Install other packages by running: 
 
 ```
 pip install -r requirements.txt
 ```
 
-4. We introduce [BiSeNet](https://github.com/zllrunning/face-parsing.PyTorch) for the segmentation of face region. Please download its [checkpoint](https://drive.google.com/file/d/1vYrfG-pXzU4g_YGDHWcJDtwXaVykx4Qt/view?usp=drive_link) and put it under (`faceparsing/res/cp`)
+5. We introduce [BiSeNet](https://github.com/zllrunning/face-parsing.PyTorch) for the segmentation of face region. Please download its [checkpoint](https://drive.google.com/file/d/1vYrfG-pXzU4g_YGDHWcJDtwXaVykx4Qt/view?usp=drive_link) and put it under (`faceparsing/res/cp`)
 
-5. Please download the [baselMorphableModel](https://drive.google.com/file/d/13hsGFaAVgEde60hD9OxV5X0wfZoC7zvh/view?usp=drive_link) and unzip it under the dir. 
+6. Please download the [baselMorphableModel](https://drive.google.com/file/d/13hsGFaAVgEde60hD9OxV5X0wfZoC7zvh/view?usp=drive_link) and unzip it under the dir. 
 
 The sub-folders under (`Deface`) should be organized as
 
@@ -47,7 +64,7 @@ Deface/
 └── ...
 ```
 
-6. Download our [data collection](https://drive.google.com/file/d/1EDxHPe35WLn15jprmWkSbs0FLolrXN0y/view?usp=sharing), and run the codes on them.
+7. Download our [data collection](https://drive.google.com/file/d/1EDxHPe35WLn15jprmWkSbs0FLolrXN0y/view?usp=sharing), and run the codes on them.
 
 ## How to Use
 
