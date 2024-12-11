@@ -96,7 +96,7 @@ python3 evaluate.py --configs cfgs/vox2_img.ini --input_dir shadow_data/voxceleb
 After optimization, the evaluation would be:
 
 ```
-python3 python3 metrics.py --input_dir shadow_data/voxceleb_pics --output_dir output_pics --result_dir result.txt
+python3 metrics.py --input_dir shadow_data/voxceleb_pics --output_dir output_pics --result_dir result.txt
 ```
 
 The results would be written into (`result.txt`).
