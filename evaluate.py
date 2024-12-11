@@ -3,7 +3,6 @@ import argparse
 
 def swap_pics(indir, outdir, ckptdir, config):
     idnames = os.listdir(indir)
-    idnames = ['id9180']
     for i in range(len(idnames)):
         idi = idnames[i]
         #if idi in ['id06000']:
@@ -12,7 +11,6 @@ def swap_pics(indir, outdir, ckptdir, config):
         #    config.lamdmarksDetectorType == 'mediapipe'
         idpath = os.path.join(indir, idi)
         pairnames = os.listdir(idpath)
-        pairnames = ['pair1']
         for pair in pairnames:
             outpath = os.path.join(outdir, idi, pair)
             ckpt_path = os.path.join(ckptdir, idi, pair)
@@ -28,7 +26,6 @@ def swap_pics(indir, outdir, ckptdir, config):
             targetin_path = os.path.join(pairpath, 'target')
 
             swap_paras(sourcein_path, targetin_path,os.path.join(outdir, idi, pair, 'source'), os.path.join(outdir, idi, pair, 'target'), os.path.join(ckptdir, idi, pair, 'source.pickle'), os.path.join(ckptdir, idi, pair, 'target.pickle'), config)
-            assert False
 
 def swap_paras(source, target, soutpath, outpath, source_ckpt, target_ckpt, config):
     op_source = Optimizer(outpath, config)
