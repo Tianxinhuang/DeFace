@@ -1,1 +1,0 @@
-loading optim config from:  ./cfgs/vox2_seq.ini
