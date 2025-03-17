@@ -35,7 +35,7 @@ class Pipeline:
         self.uvMap = self.morphableModel.uvMap.clone()
         self.uvMap[:, 1] = 1.0 - self.uvMap[:, 1]
         #self.faces32 = self.morphableModel.faces.to(torch.int32).contiguous()
-        self.faces32 = torch.Tensor(np.loadtxt('/Light_distangle/Data' + '/newface.txt')).reshape(-1, 3).to(self.device).to(torch.int32).contiguous()
+        self.faces32 = torch.Tensor(np.loadtxt('newface.txt')).reshape(-1, 3).to(self.device).to(torch.int32).contiguous()
         self.shBands = config.bands
         self.sharedIdentity = config.shareid
 
